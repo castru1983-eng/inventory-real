@@ -140,15 +140,10 @@ const App: React.FC = () => {
         return result;
       };
 
-      // 1. 拆分行，過濾掉完全空白的行（避免 CSV 尾端的空行）
       const rawLines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
       if (rawLines.length === 0) return;
       
       const headers = parseCSVLine(rawLines[0]).map(h => h.trim());
-      
-      // 2. 核心過濾邏輯：
-      // 對每一列中的每個儲存格進行去空格 (trim)。
-      // 只有當該列中「至少有一個儲存格含有內容」時，才將其匯入。
       const rows = rawLines.slice(1)
         .map(line => parseCSVLine(line).map(cell => (cell || '').toString().trim()))
         .filter(row => row.some(cell => cell !== "")); 
@@ -157,7 +152,6 @@ const App: React.FC = () => {
         id: generateId(), 
         title: fileName, 
         columns: headers, 
-        // 如果匯入後完全沒有 row，則補上一行空白方便編輯，否則就只顯示有資料的 row
         rows: rows.length > 0 ? rows : [new Array(headers.length).fill('')] 
       };
 
@@ -191,9 +185,17 @@ const App: React.FC = () => {
     if (!q) return activePage.tables;
     return activePage.tables.filter(table => 
       table.title.toLowerCase().includes(q) || 
+      table.columns.some(col => (col || '').toLowerCase().includes(q)) ||
       table.rows.some(row => row.some(cell => (cell || '').toString().toLowerCase().includes(q)))
     );
   }, [activePage, searchQuery]);
+
+  // 找出第一個包含搜尋結果的表格 ID，以便 TableEditor 執行捲動
+  const firstMatchTableId = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q || filteredTables.length === 0) return null;
+    return filteredTables[0].id;
+  }, [filteredTables, searchQuery]);
 
   return (
     <div className="min-h-screen pb-32 bg-[#fcfcfc] text-black font-medium selection:bg-yellow-200">
@@ -206,7 +208,7 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-2xl font-black tracking-tighter uppercase italic leading-none">Table Expert</h1>
-            <p className="text-[10px] font-black mt-1 bg-black text-white px-1 w-fit">SMART IMPORT ACTIVE</p>
+            <p className="text-[10px] font-black mt-1 bg-black text-white px-1 w-fit">AUTO-SCROLL ENABLED</p>
           </div>
         </div>
 
@@ -214,7 +216,7 @@ const App: React.FC = () => {
           <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
           <input 
             type="text" 
-            placeholder="搜尋表格內容..." 
+            placeholder="搜尋關鍵字，將自動定位結果..." 
             value={searchQuery} 
             onChange={(e) => setSearchQuery(e.target.value)} 
             className="w-full bg-gray-50 border-4 border-black rounded-xl py-2.5 pl-12 pr-4 font-black focus:outline-none focus:bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all" 
@@ -279,10 +281,18 @@ const App: React.FC = () => {
         ) : (
           <div className="space-y-24">
             {filteredTables.map(table => (
-              <TableEditor key={table.id} table={table} onUpdate={updateTable} onDelete={deleteTable} onDuplicate={() => {
-                const newTable = { ...JSON.parse(JSON.stringify(table)), id: generateId(), title: `${table.title} (副本)` };
-                setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
-              }} searchQuery={searchQuery} />
+              <TableEditor 
+                key={table.id} 
+                table={table} 
+                onUpdate={updateTable} 
+                onDelete={deleteTable} 
+                onDuplicate={() => {
+                  const newTable = { ...JSON.parse(JSON.stringify(table)), id: generateId(), title: `${table.title} (副本)` };
+                  setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
+                }} 
+                searchQuery={searchQuery} 
+                isFirstMatch={table.id === firstMatchTableId}
+              />
             ))}
           </div>
         )}

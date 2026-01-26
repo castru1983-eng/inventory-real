@@ -8,6 +8,7 @@ interface TableEditorProps {
   onDelete: (id: string) => void;
   onDuplicate: () => void;
   searchQuery?: string;
+  isFirstMatch?: boolean;
 }
 
 const AutoHeightTextarea: React.FC<{
@@ -45,8 +46,29 @@ const AutoHeightTextarea: React.FC<{
   );
 };
 
-export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDelete, onDuplicate, searchQuery = '' }) => {
+export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDelete, onDuplicate, searchQuery = '', isFirstMatch = false }) => {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // 自動捲動邏輯：如果此表格是搜尋結果的第一個，則自動捲動至視圖
+  useEffect(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (isFirstMatch && q && containerRef.current) {
+      // 1. 捲動視窗至表格
+      containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // 2. 捲動表格內部滾動條至第一個匹配的儲存格
+      setTimeout(() => {
+        if (scrollContainerRef.current) {
+          const firstMatch = scrollContainerRef.current.querySelector('.search-match-cell');
+          if (firstMatch) {
+            firstMatch.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
+        }
+      }, 500); // 等待視窗捲動穩定
+    }
+  }, [searchQuery, isFirstMatch]);
 
   const emptyRowIndices = table.rows.reduce((acc, row, idx) => {
     if (row.every(cell => !cell || !cell.trim())) acc.push(idx);
@@ -99,7 +121,7 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
   };
 
   const downloadCSV = () => {
-    const escapeCSV = (str: string) => `"${(str || '').replace(/"/g, '""')}"`;
+    const escapeCSV = (str: string) => `"${(str || '').toString().replace(/"/g, '""')}"`;
     const csvContent = [
       table.columns.map(escapeCSV).join(','),
       ...table.rows.map(row => row.map(escapeCSV).join(','))
@@ -114,17 +136,17 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
 
   const isMatch = (text: string) => {
     if (!searchQuery.trim()) return false;
-    return (text || '').toLowerCase().includes(searchQuery.toLowerCase().trim());
+    return (text || '').toString().toLowerCase().includes(searchQuery.toLowerCase().trim());
   };
 
   return (
-    <div className="bg-white rounded-xl overflow-hidden border-4 border-black mb-16 transition-all shadow-[12px_12px_0px_0px_rgba(0,0,0,1)]">
+    <div ref={containerRef} className={`bg-white rounded-xl overflow-hidden border-4 border-black mb-16 transition-all shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] ${isFirstMatch && searchQuery.trim() ? 'ring-8 ring-yellow-400/30' : ''}`}>
       <div className="p-6 border-b-4 border-black flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white relative z-50">
         <div className="flex-1">
           <AutoHeightTextarea
             value={table.title}
             onChange={(val) => onUpdate({ ...table, title: val })}
-            className={`text-3xl font-black text-black border-b-2 border-black pb-1 uppercase italic focus:bg-yellow-50 ${isMatch(table.title) ? 'bg-yellow-200' : ''}`}
+            className={`text-3xl font-black text-black border-b-2 border-black pb-1 uppercase italic focus:bg-yellow-50 ${isMatch(table.title) ? 'bg-orange-400 !text-white' : ''}`}
             placeholder="表格標題..."
           />
         </div>
@@ -147,18 +169,27 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
         </div>
       </div>
 
-      <div className="max-h-[600px] overflow-auto custom-scrollbar relative bg-gray-100">
+      <div ref={scrollContainerRef} className="max-h-[600px] overflow-auto custom-scrollbar relative bg-gray-100">
         <table className="border-separate border-spacing-0 w-max min-w-full">
           <thead>
             <tr className="sticky top-0 z-[60]">
               {table.columns.map((col, idx) => (
-                <th key={idx} className={`p-3 border-b-4 border-r-2 border-black relative group transition-all min-w-[140px] max-w-[200px] text-center ${idx === 0 ? 'sticky left-0 z-[70] border-r-4 shadow-[4px_0_4px_-2px_rgba(0,0,0,0.1)] bg-yellow-400' : 'bg-white'}`}>
+                <th 
+                  key={idx} 
+                  className={`p-3 border-b-4 border-r-2 border-black relative group transition-all text-center
+                    ${idx === 0 
+                      ? 'sticky left-0 z-[70] border-r-4 shadow-[4px_0_4px_-2px_rgba(0,0,0,0.1)] bg-yellow-400 min-w-[80px] w-[80px]' 
+                      : 'bg-white min-w-[260px] w-[260px] text-left'
+                    }
+                    ${isMatch(col) ? 'search-match-cell' : ''}
+                  `}
+                >
                   <AutoHeightTextarea 
                     value={col} 
                     onChange={(v) => updateHeader(idx, v)} 
-                    className={`text-black uppercase placeholder:text-black/30 ${idx === 0 ? 'text-lg font-black' : 'text-xs font-black'} ${isMatch(col) ? 'bg-white/40 rounded-sm' : ''}`} 
-                    placeholder={`欄位 ${idx + 1}`}
-                    textAlign="center"
+                    className={`text-black uppercase placeholder:text-black/30 ${idx === 0 ? 'text-lg font-black' : 'text-xs font-black'} ${isMatch(col) ? 'bg-orange-400 !text-white rounded-sm' : ''}`} 
+                    placeholder={idx === 0 ? "ID" : `欄位 ${idx + 1}`}
+                    textAlign={idx === 0 ? 'center' : 'left'}
                   />
                   <button onClick={() => removeColumn(idx)} className="opacity-0 group-hover:opacity-100 absolute top-1 right-1 text-black/20 hover:text-red-600 transition-opacity p-1"><i className="fas fa-times-circle text-[10px]"></i></button>
                 </th>
@@ -172,12 +203,21 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
             {table.rows.map((row, rIdx) => (
               <tr key={rIdx} className="hover:bg-yellow-50 transition-colors group bg-white">
                 {row.map((cell, cIdx) => (
-                  <td key={cIdx} className={`p-2 border-b-2 border-r-2 border-black text-black transition-all min-w-[140px] max-w-[200px] ${cIdx === 0 ? 'sticky left-0 z-50 bg-yellow-400 font-black border-r-4 shadow-[4px_0_4px_-2px_rgba(0,0,0,0.1)]' : 'font-medium bg-white'}`}>
+                  <td 
+                    key={cIdx} 
+                    className={`p-2 border-b-2 border-r-2 border-black text-black transition-all
+                      ${cIdx === 0 
+                        ? 'sticky left-0 z-50 bg-yellow-400 font-black border-r-4 shadow-[4px_0_4px_-2px_rgba(0,0,0,0.1)] min-w-[80px] w-[80px] text-center' 
+                        : 'font-medium bg-white min-w-[260px] w-[260px] text-left'
+                      }
+                      ${isMatch(cell) ? 'search-match-cell' : ''}
+                    `}
+                  >
                     <AutoHeightTextarea 
                       value={cell} 
                       onChange={(v) => updateCell(rIdx, cIdx, v)} 
                       textAlign={cIdx === 0 ? 'center' : 'left'}
-                      className={`text-black leading-tight ${cIdx === 0 ? 'text-lg font-black' : 'text-xs'} ${isMatch(cell) ? 'bg-white/60 ring-1 ring-black rounded-sm' : ''}`} 
+                      className={`text-black leading-tight ${cIdx === 0 ? 'text-lg font-black' : 'text-xs'} ${isMatch(cell) ? 'bg-orange-400 !text-white ring-2 ring-black rounded-sm' : ''}`} 
                     />
                   </td>
                 ))}
