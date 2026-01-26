@@ -1,0 +1,294 @@
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { TableData, PageData } from './types.ts';
+import { TableEditor } from './components/TableEditor.tsx';
+
+const STORAGE_KEY = 'table_architect_v5_final';
+
+const generateId = () => {
+  try {
+    return crypto.randomUUID();
+  } catch (e) {
+    return Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+  }
+};
+
+const App: React.FC = () => {
+  const [pages, setPages] = useState<PageData[]>([]);
+  const [activePageId, setActivePageId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isEditingPageName, setIsEditingPageName] = useState<string | null>(null);
+  const [pageIdToConfirmDelete, setPageIdToConfirmDelete] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsedPages = JSON.parse(saved);
+        if (Array.isArray(parsedPages) && parsedPages.length > 0) {
+          setPages(parsedPages);
+          setActivePageId(parsedPages[0].id);
+        } else {
+          createDefaultPage();
+        }
+      } catch (e) {
+        createDefaultPage();
+      }
+    } else {
+      createDefaultPage();
+    }
+  }, []);
+
+  const createDefaultPage = () => {
+    const defaultId = generateId();
+    const defaultPage: PageData = {
+      id: defaultId,
+      name: '預設工作區',
+      tables: []
+    };
+    setPages([defaultPage]);
+    setActivePageId(defaultId);
+  };
+
+  useEffect(() => {
+    if (pages.length > 0) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(pages));
+    }
+  }, [pages]);
+
+  const activePage = useMemo(() => 
+    pages.find(p => p.id === activePageId) || null, 
+    [pages, activePageId]
+  );
+
+  const addNewPage = () => {
+    const newId = generateId();
+    const newPage: PageData = { id: newId, name: `新工作區 ${pages.length + 1}`, tables: [] };
+    setPages(prev => [...prev, newPage]);
+    setActivePageId(newId);
+    setTimeout(() => setIsEditingPageName(newId), 50);
+  };
+
+  const renamePage = (id: string, newName: string) => {
+    setPages(prev => prev.map(p => p.id === id ? { ...p, name: newName } : p));
+  };
+
+  const executeDeletePage = (id: string) => {
+    const deletedIndex = pages.findIndex(p => p.id === id);
+    const newPages = pages.filter(p => p.id !== id);
+    if (newPages.length === 0) {
+      createDefaultPage();
+    } else {
+      setPages(newPages);
+      if (activePageId === id) {
+        const nextIndex = Math.max(0, Math.min(deletedIndex, newPages.length - 1));
+        setActivePageId(newPages[nextIndex].id);
+      }
+    }
+    setPageIdToConfirmDelete(null);
+  };
+
+  const addNewTable = () => {
+    if (!activePageId) return;
+    const newTable: TableData = {
+      id: generateId(),
+      title: '未命名表格',
+      columns: ['標題 1', '標題 2', '標題 3'],
+      rows: [['', '', '']]
+    };
+    setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
+    setSearchQuery('');
+  };
+
+  const updateTable = (updatedTable: TableData) => {
+    setPages(prev => prev.map(p => 
+      p.id === activePageId ? { ...p, tables: p.tables.map(t => t.id === updatedTable.id ? updatedTable : t) } : p
+    ));
+  };
+
+  const deleteTable = (id: string) => {
+    setPages(prev => prev.map(p => 
+      p.id === activePageId ? { ...p, tables: p.tables.filter(t => t.id !== id) } : p
+    ));
+  };
+
+  const handleImportClick = () => fileInputRef.current?.click();
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !activePageId) return;
+
+    const fileName = file.name.split('.').slice(0, -1).join('.') || '匯入的表格';
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      if (!text) return;
+
+      const parseCSVLine = (line: string) => {
+        const result = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+          else if (char === '"') inQuotes = !inQuotes;
+          else if (char === ',' && !inQuotes) { result.push(cur); cur = ''; }
+          else cur += char;
+        }
+        result.push(cur);
+        return result;
+      };
+
+      // 1. 拆分行，過濾掉完全空白的行（避免 CSV 尾端的空行）
+      const rawLines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+      if (rawLines.length === 0) return;
+      
+      const headers = parseCSVLine(rawLines[0]).map(h => h.trim());
+      
+      // 2. 核心過濾邏輯：
+      // 對每一列中的每個儲存格進行去空格 (trim)。
+      // 只有當該列中「至少有一個儲存格含有內容」時，才將其匯入。
+      const rows = rawLines.slice(1)
+        .map(line => parseCSVLine(line).map(cell => (cell || '').toString().trim()))
+        .filter(row => row.some(cell => cell !== "")); 
+
+      const newTable: TableData = { 
+        id: generateId(), 
+        title: fileName, 
+        columns: headers, 
+        // 如果匯入後完全沒有 row，則補上一行空白方便編輯，否則就只顯示有資料的 row
+        rows: rows.length > 0 ? rows : [new Array(headers.length).fill('')] 
+      };
+
+      setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
+      event.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const exportAllTablesOnPage = () => {
+    if (!activePage || activePage.tables.length === 0) return;
+    const escapeCSV = (str: string) => `"${(str || '').toString().replace(/"/g, '""')}"`;
+    const csvContent = activePage.tables.map(table => {
+      const titleRow = [`>>> 表格：${table.title} <<<`].map(escapeCSV).join(',');
+      const headerRow = table.columns.map(escapeCSV).join(',');
+      const dataRows = table.rows.map(row => row.map(escapeCSV).join(',')).join('\n');
+      return `${titleRow}\n${headerRow}\n${dataRows}`;
+    }).join('\n\n\n'); 
+
+    const blob = new Blob([`\ufeff${csvContent}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${activePage.name}_全頁匯出.csv`;
+    link.click();
+  };
+
+  const filteredTables = useMemo(() => {
+    if (!activePage) return [];
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return activePage.tables;
+    return activePage.tables.filter(table => 
+      table.title.toLowerCase().includes(q) || 
+      table.rows.some(row => row.some(cell => (cell || '').toString().toLowerCase().includes(q)))
+    );
+  }, [activePage, searchQuery]);
+
+  return (
+    <div className="min-h-screen pb-32 bg-[#fcfcfc] text-black font-medium selection:bg-yellow-200">
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".csv" className="hidden" />
+      
+      <header className="sticky top-0 z-[100] bg-white border-b-4 border-black px-8 py-5 flex flex-col md:flex-row items-center justify-between shadow-sm gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-black border-2 border-black rounded flex items-center justify-center text-white shadow-[4px_4px_0px_0px_rgba(255,255,0,1)]">
+            <i className="fas fa-table-list text-2xl"></i>
+          </div>
+          <div>
+            <h1 className="text-2xl font-black tracking-tighter uppercase italic leading-none">Table Expert</h1>
+            <p className="text-[10px] font-black mt-1 bg-black text-white px-1 w-fit">SMART IMPORT ACTIVE</p>
+          </div>
+        </div>
+
+        <div className="flex-1 max-w-xl w-full relative">
+          <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
+          <input 
+            type="text" 
+            placeholder="搜尋表格內容..." 
+            value={searchQuery} 
+            onChange={(e) => setSearchQuery(e.target.value)} 
+            className="w-full bg-gray-50 border-4 border-black rounded-xl py-2.5 pl-12 pr-4 font-black focus:outline-none focus:bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all" 
+          />
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button onClick={handleImportClick} className="px-4 py-3 rounded-lg font-black border-2 border-black hover:bg-gray-100 transition-all active:translate-y-0.5">
+            <i className="fas fa-file-import mr-2"></i>匯入 CSV
+          </button>
+          <button onClick={exportAllTablesOnPage} className="px-4 py-3 rounded-lg font-black border-2 border-black hover:bg-yellow-400 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 transition-all">
+            <i className="fas fa-file-export mr-2"></i>匯出全頁
+          </button>
+          <button onClick={addNewTable} className="px-6 py-3 bg-black text-white rounded-lg font-black border-2 border-black hover:bg-gray-800 shadow-[4px_4px_0px_0px_rgba(255,255,0,0.5)] active:translate-y-0.5 transition-all">
+            <i className="fas fa-plus mr-2"></i>新增表格
+          </button>
+        </div>
+      </header>
+
+      <div className="bg-white border-b-4 border-black px-8 pt-6 flex items-end gap-1 overflow-x-auto no-scrollbar">
+        {pages.map((page) => (
+          <div 
+            key={page.id} 
+            className={`group relative flex items-center transition-all px-5 py-3 border-t-4 border-x-4 border-black rounded-t-xl cursor-pointer min-w-[200px] ${activePageId === page.id ? 'bg-yellow-400 -mb-1 translate-y-[-4px] z-10' : 'bg-gray-100 hover:bg-gray-200'}`} 
+            onClick={() => setActivePageId(page.id)}
+          >
+            {pageIdToConfirmDelete === page.id ? (
+              <div className="flex items-center justify-between w-full gap-2 animate-pulse" onClick={(e) => e.stopPropagation()}>
+                <span className="text-xs font-black uppercase text-red-600 italic">刪除？</span>
+                <div className="flex gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); executeDeletePage(page.id); }} className="px-2 py-1 bg-red-600 text-white text-[10px] rounded border border-black font-black">是</button>
+                  <button onClick={(e) => { e.stopPropagation(); setPageIdToConfirmDelete(null); }} className="px-2 py-1 bg-white text-black text-[10px] rounded border border-black font-black">否</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex-1 flex items-center gap-2 overflow-hidden">
+                  <i className={`fas ${activePageId === page.id ? 'fa-folder-open' : 'fa-folder'} text-sm`}></i>
+                  {isEditingPageName === page.id ? (
+                    <input autoFocus className="bg-white/50 border-b-2 border-black font-black w-full outline-none px-1" value={page.name} onChange={(e) => renamePage(page.id, e.target.value)} onBlur={() => setIsEditingPageName(null)} onKeyDown={(e) => e.key === 'Enter' && setIsEditingPageName(null)} onClick={(e) => e.stopPropagation()} />
+                  ) : (
+                    <span className="font-black truncate text-base" onDoubleClick={() => setIsEditingPageName(page.id)}>{page.name}</span>
+                  )}
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); setPageIdToConfirmDelete(page.id); }} className="opacity-0 group-hover:opacity-100 w-8 h-8 flex items-center justify-center hover:bg-red-600 hover:text-white rounded-md text-red-600 transition-all ml-2"><i className="fas fa-times text-xs"></i></button>
+              </>
+            )}
+          </div>
+        ))}
+        <button onClick={addNewPage} className="mb-3 ml-4 w-10 h-10 bg-black text-white rounded-full hover:scale-110 transition-transform shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)] flex items-center justify-center"><i className="fas fa-plus"></i></button>
+      </div>
+
+      <main className="max-w-7xl mx-auto px-8 pt-12">
+        {activePage && activePage.tables.length === 0 ? (
+          <div className="py-48 text-center border-4 border-dashed border-black rounded-[2rem] bg-white shadow-[16px_16px_0px_0px_rgba(0,0,0,0.05)]">
+            <h2 className="text-4xl font-black mb-10 italic uppercase tracking-tight">「{activePage.name}」目前沒有表格</h2>
+            <div className="flex justify-center gap-4">
+              <button onClick={handleImportClick} className="bg-white text-black px-8 py-4 rounded-xl font-black text-xl border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:translate-y-1 transition-all">匯入 CSV 檔案</button>
+              <button onClick={addNewTable} className="bg-black text-white px-8 py-4 rounded-xl font-black text-xl border-4 border-black shadow-[6px_6px_0px_0px_rgba(255,255,0,0.4)] active:translate-y-1 transition-all">手動新增表格</button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-24">
+            {filteredTables.map(table => (
+              <TableEditor key={table.id} table={table} onUpdate={updateTable} onDelete={deleteTable} onDuplicate={() => {
+                const newTable = { ...JSON.parse(JSON.stringify(table)), id: generateId(), title: `${table.title} (副本)` };
+                setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
+              }} searchQuery={searchQuery} />
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;
