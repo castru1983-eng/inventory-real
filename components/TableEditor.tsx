@@ -55,10 +55,8 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
   useEffect(() => {
     const q = searchQuery.toLowerCase().trim();
     if (isFirstMatch && q && containerRef.current) {
-      // 1. 捲動視窗至表格
       containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-      // 2. 捲動表格內部滾動條至第一個匹配的儲存格
       setTimeout(() => {
         if (scrollContainerRef.current) {
           const firstMatch = scrollContainerRef.current.querySelector('.search-match-cell');
@@ -66,7 +64,7 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
             firstMatch.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
           }
         }
-      }, 500); // 等待視窗捲動穩定
+      }, 500);
     }
   }, [searchQuery, isFirstMatch]);
 
@@ -179,7 +177,7 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
                   className={`p-3 border-b-4 border-r-2 border-black relative group transition-all text-center
                     ${idx === 0 
                       ? 'sticky left-0 z-[70] border-r-4 shadow-[4px_0_4px_-2px_rgba(0,0,0,0.1)] bg-yellow-400 min-w-[80px] w-[80px]' 
-                      : 'bg-white min-w-[260px] w-[260px] text-left'
+                      : 'bg-white min-w-[210px] w-[210px] text-left'
                     }
                     ${isMatch(col) ? 'search-match-cell' : ''}
                   `}
@@ -208,7 +206,7 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
                     className={`p-2 border-b-2 border-r-2 border-black text-black transition-all
                       ${cIdx === 0 
                         ? 'sticky left-0 z-50 bg-yellow-400 font-black border-r-4 shadow-[4px_0_4px_-2px_rgba(0,0,0,0.1)] min-w-[80px] w-[80px] text-center' 
-                        : 'font-medium bg-white min-w-[260px] w-[260px] text-left'
+                        : 'font-medium bg-white min-w-[210px] w-[210px] text-left'
                       }
                       ${isMatch(cell) ? 'search-match-cell' : ''}
                     `}
