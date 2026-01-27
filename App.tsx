@@ -126,36 +126,125 @@ const App: React.FC = () => {
       const text = e.target?.result as string;
       if (!text) return;
 
-      const parseCSVLine = (line: string) => {
-        const result = [];
-        let cur = '', inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-          const char = line[i];
-          if (char === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-          else if (char === '"') inQuotes = !inQuotes;
-          else if (char === ',' && !inQuotes) { result.push(cur); cur = ''; }
-          else cur += char;
+      /**
+       * 強健的 CSV 解析器：支援單元格內換行
+       * 遍歷所有字元，只有在「非引號內」遇到的換行才視為新列。
+       */
+      const parseCSVToRows = (csvText: string): string[][] => {
+        const rows: string[][] = [];
+        let currentRow: string[] = [];
+        let currentCell = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < csvText.length; i++) {
+          const char = csvText[i];
+          const nextChar = csvText[i + 1];
+
+          if (inQuotes) {
+            // 在引號內處理引號轉義 "" -> "
+            if (char === '"' && nextChar === '"') {
+              currentCell += '"';
+              i++;
+            } else if (char === '"') {
+              inQuotes = false;
+            } else {
+              currentCell += char;
+            }
+          } else {
+            if (char === '"') {
+              inQuotes = true;
+            } else if (char === ',') {
+              currentRow.push(currentCell);
+              currentCell = '';
+            } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+              // 真正的列換行
+              if (char === '\r') i++; // 跳過 \r
+              currentRow.push(currentCell);
+              rows.push(currentRow);
+              currentRow = [];
+              currentCell = '';
+            } else if (char !== '\r') {
+              currentCell += char;
+            }
+          }
         }
-        result.push(cur);
-        return result;
+        // 處理最後殘留的資料
+        if (currentCell !== '' || currentRow.length > 0) {
+          currentRow.push(currentCell);
+          rows.push(currentRow);
+        }
+        return rows;
       };
 
-      const rawLines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-      if (rawLines.length === 0) return;
+      const allParsedRows = parseCSVToRows(text);
+      if (allParsedRows.length === 0) return;
+
+      const detectedTables: TableData[] = [];
+      let currentTable: TableData | null = null;
+
+      // 檢查是否為本系統導出的多表格格式 (檢查所有列的第一欄)
+      const isMultiTableFile = allParsedRows.some(row => 
+        (row[0] || '').trim().startsWith('>>> 表格：')
+      );
+
+      if (!isMultiTableFile) {
+        // 標準單一表格處理
+        const headers = allParsedRows[0].map(h => h.trim());
+        const dataRows = allParsedRows.slice(1)
+          .filter(row => row.some(cell => cell.trim() !== "")); 
+        
+        detectedTables.push({
+          id: generateId(),
+          title: fileName,
+          columns: headers,
+          rows: dataRows.length > 0 ? dataRows : [new Array(headers.length).fill('')]
+        });
+      } else {
+        // 多表格解析邏輯
+        allParsedRows.forEach(row => {
+          const firstCellContent = (row[0] || '').trim();
+
+          if (firstCellContent.startsWith('>>> 表格：') && firstCellContent.endsWith('<<<')) {
+            // 偵測到新表格標籤
+            const extractedTitle = firstCellContent.replace('>>> 表格：', '').replace('<<<', '').trim();
+            currentTable = {
+              id: generateId(),
+              title: extractedTitle,
+              columns: [],
+              rows: []
+            };
+            detectedTables.push(currentTable);
+          } else if (currentTable) {
+            // 如果該列全部是空的（例如匯出時的空行分隔），則略過
+            if (!row.some(c => c.trim() !== "")) return;
+
+            if (currentTable.columns.length === 0) {
+              // 標記後的非空行視為欄位標頭
+              currentTable.columns = row.map(c => c.trim());
+            } else {
+              // 之後的行視為資料列
+              currentTable.rows.push(row.map(c => c.toString()));
+            }
+          }
+        });
+      }
+
+      // 最終清理
+      detectedTables.forEach(t => {
+        if (t.rows.length === 0) {
+          t.rows = [new Array(t.columns.length).fill('')];
+        }
+      });
+
+      if (detectedTables.length > 0) {
+        setPages(prev => prev.map(p => 
+          p.id === activePageId 
+            ? { ...p, tables: [...p.tables, ...detectedTables] } 
+            : p
+        ));
+        setSearchQuery('');
+      }
       
-      const headers = parseCSVLine(rawLines[0]).map(h => h.trim());
-      const rows = rawLines.slice(1)
-        .map(line => parseCSVLine(line).map(cell => (cell || '').toString().trim()))
-        .filter(row => row.some(cell => cell !== "")); 
-
-      const newTable: TableData = { 
-        id: generateId(), 
-        title: fileName, 
-        columns: headers, 
-        rows: rows.length > 0 ? rows : [new Array(headers.length).fill('')] 
-      };
-
-      setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
       event.target.value = '';
     };
     reader.readAsText(file);
@@ -168,6 +257,7 @@ const App: React.FC = () => {
       const titleRow = [`>>> 表格：${table.title} <<<`].map(escapeCSV).join(',');
       const headerRow = table.columns.map(escapeCSV).join(',');
       const dataRows = table.rows.map(row => row.map(escapeCSV).join(',')).join('\n');
+      // 表格之間留空行增加可讀性
       return `${titleRow}\n${headerRow}\n${dataRows}`;
     }).join('\n\n\n'); 
 
@@ -190,7 +280,6 @@ const App: React.FC = () => {
     );
   }, [activePage, searchQuery]);
 
-  // 找出第一個包含搜尋結果的表格 ID，以便 TableEditor 執行捲動
   const firstMatchTableId = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     if (!q || filteredTables.length === 0) return null;
@@ -288,7 +377,7 @@ const App: React.FC = () => {
                 onDelete={deleteTable} 
                 onDuplicate={() => {
                   const newTable = { ...JSON.parse(JSON.stringify(table)), id: generateId(), title: `${table.title} (副本)` };
-                  setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
+                  setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [...p.tables, newTable] } : p));
                 }} 
                 searchQuery={searchQuery} 
                 isFirstMatch={table.id === firstMatchTableId}
