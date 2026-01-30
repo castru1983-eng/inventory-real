@@ -19,7 +19,7 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditingPageName, setIsEditingPageName] = useState<string | null>(null);
   const [pageIdToConfirmDelete, setPageIdToConfirmDelete] = useState<string | null>(null);
-  const [isEditMode, setIsEditMode] = useState(true); // 新增編輯模式狀態
+  const [isEditMode, setIsEditMode] = useState(true); 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -180,39 +180,22 @@ const App: React.FC = () => {
       if (allParsedRows.length === 0) return;
 
       const detectedTables: TableData[] = [];
-      let currentTable: TableData | null = null;
-
-      const isMultiTableFile = allParsedRows.some(row => 
+      
+      // 檢查是否為系統匯出的多表格格式 (含 >>> 表格： 標記)
+      const isSystemMultiTableFile = allParsedRows.some(row => 
         (row[0] || '').trim().startsWith('>>> 表格：')
       );
 
-      if (!isMultiTableFile) {
-        const headers = allParsedRows[0].map(h => h.trim());
-        const dataRows = allParsedRows.slice(1)
-          .filter(row => row.some(cell => cell.trim() !== "")); 
-        
-        detectedTables.push({
-          id: generateId(),
-          title: fileName,
-          columns: headers,
-          rows: dataRows.length > 0 ? dataRows : [new Array(headers.length).fill('')]
-        });
-      } else {
+      if (isSystemMultiTableFile) {
+        let currentTable: TableData | null = null;
         allParsedRows.forEach(row => {
           const firstCellContent = (row[0] || '').trim();
-
           if (firstCellContent.startsWith('>>> 表格：') && firstCellContent.endsWith('<<<')) {
             const extractedTitle = firstCellContent.replace('>>> 表格：', '').replace('<<<', '').trim();
-            currentTable = {
-              id: generateId(),
-              title: extractedTitle,
-              columns: [],
-              rows: []
-            };
+            currentTable = { id: generateId(), title: extractedTitle, columns: [], rows: [] };
             detectedTables.push(currentTable);
           } else if (currentTable) {
             if (!row.some(c => c.trim() !== "")) return;
-
             if (currentTable.columns.length === 0) {
               currentTable.columns = row.map(c => c.trim());
             } else {
@@ -220,8 +203,44 @@ const App: React.FC = () => {
             }
           }
         });
+      } else {
+        // 處理一般 CSV：根據空行切分區塊
+        let currentBlockRows: string[][] = [];
+        
+        allParsedRows.forEach((row) => {
+          const isRowEmpty = !row.some(cell => cell.trim() !== "");
+          
+          if (isRowEmpty) {
+            if (currentBlockRows.length > 0) {
+              const headers = currentBlockRows[0];
+              const data = currentBlockRows.slice(1);
+              detectedTables.push({
+                id: generateId(),
+                title: detectedTables.length === 0 ? fileName : `${fileName} - 區塊 ${detectedTables.length + 1}`,
+                columns: headers,
+                rows: data.length > 0 ? data : [new Array(headers.length).fill('')]
+              });
+              currentBlockRows = [];
+            }
+          } else {
+            currentBlockRows.push(row);
+          }
+        });
+
+        // 處理最後一個區塊
+        if (currentBlockRows.length > 0) {
+          const headers = currentBlockRows[0];
+          const data = currentBlockRows.slice(1);
+          detectedTables.push({
+            id: generateId(),
+            title: detectedTables.length === 0 ? fileName : `${fileName} - 區塊 ${detectedTables.length + 1}`,
+            columns: headers,
+            rows: data.length > 0 ? data : [new Array(headers.length).fill('')]
+          });
+        }
       }
 
+      // 確保所有表格都有基本列
       detectedTables.forEach(t => {
         if (t.rows.length === 0) {
           t.rows = [new Array(t.columns.length).fill('')];
@@ -292,7 +311,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* 搜尋欄 */}
         <div className="flex-1 max-w-lg relative">
           <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-black"></i>
           <input 
@@ -304,9 +322,7 @@ const App: React.FC = () => {
           />
         </div>
 
-        {/* 編輯模式開關 & 按鈕區 */}
         <div className="flex items-center gap-4">
-          {/* 編輯模式開關 */}
           <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-xl border-2 border-black">
             <span className={`text-[10px] font-black uppercase ml-1 ${!isEditMode ? 'text-black' : 'text-gray-400'}`}>檢視</span>
             <button 
@@ -338,7 +354,6 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* 頁籤欄 */}
       <div className="bg-white border-b-4 border-black px-8 pt-6 flex items-end gap-1 overflow-x-auto no-scrollbar">
         {pages.map((page) => (
           <div 
@@ -397,12 +412,12 @@ const App: React.FC = () => {
               <TableEditor 
                 key={table.id} 
                 table={table} 
-                isEditMode={isEditMode} // 傳遞編輯模式狀態
+                isEditMode={isEditMode} 
                 onUpdate={updateTable} 
                 onDelete={deleteTable} 
                 onDuplicate={() => {
                   const newTable = { ...JSON.parse(JSON.stringify(table)), id: generateId(), title: `${table.title} (副本)` };
-                  setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [...p.tables, newTable] } : p));
+                  setPages(prev => prev.map(p => p.id === activePageId ? { ...p, tables: [newTable, ...p.tables] } : p));
                 }} 
                 searchQuery={searchQuery} 
                 isFirstMatch={table.id === firstMatchTableId}
