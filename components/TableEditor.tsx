@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { TableData } from '../types.ts';
 
 interface TableEditorProps {
@@ -7,10 +7,34 @@ interface TableEditorProps {
   onUpdate: (updatedTable: TableData) => void;
   onDelete: (id: string) => void;
   onDuplicate: () => void;
-  isEditMode: boolean; // 新增 prop
+  isEditMode: boolean;
   searchQuery?: string;
   isFirstMatch?: boolean;
 }
+
+// 精確文字高亮組件
+const HighlightedText: React.FC<{ text: string; query: string }> = ({ text, query }) => {
+  const q = query.trim();
+  if (!q) return <>{text}</>;
+  
+  const escapedQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escapedQuery})`, 'gi');
+  const parts = text.split(regex);
+
+  return (
+    <>
+      {parts.map((part, i) => 
+        regex.test(part) ? (
+          <mark key={i} className="bg-fuchsia-500 text-white border border-black px-1 rounded-sm font-bold shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] inline-block leading-tight">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+};
 
 const AutoHeightTextarea: React.FC<{
   value: string;
@@ -18,39 +42,62 @@ const AutoHeightTextarea: React.FC<{
   className?: string;
   placeholder?: string;
   textAlign?: 'left' | 'center' | 'right';
-  isMatched?: boolean;
-  readOnly?: boolean; // 新增 readOnly
-}> = ({ value, onChange, className, placeholder, textAlign = 'left', isMatched = false, readOnly = false }) => {
+  searchQuery?: string;
+  readOnly?: boolean;
+}> = ({ value, onChange, className, placeholder, textAlign = 'left', searchQuery = '', readOnly = false }) => {
+  const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const adjustHeight = () => {
     const node = textareaRef.current;
     if (node) {
-      node.style.height = 'auto';
+      node.style.height = '0px';
       node.style.height = `${node.scrollHeight}px`;
     }
   };
 
+  useLayoutEffect(() => {
+    if (isFocused) {
+      adjustHeight();
+    }
+  }, [value, isFocused]);
+
   useEffect(() => {
-    adjustHeight();
-  }, [value]);
+    if (isFocused) {
+      window.addEventListener('resize', adjustHeight);
+      return () => window.removeEventListener('resize', adjustHeight);
+    }
+  }, [isFocused]);
+
+  if (!isFocused) {
+    return (
+      <div 
+        onClick={() => !readOnly && setIsFocused(true)}
+        style={{ textAlign }}
+        className={`w-full break-all whitespace-pre-wrap min-h-[1.5em] leading-normal transition-all py-1.5 ${
+          readOnly ? 'cursor-default' : 'cursor-text'
+        } ${className}`}
+      >
+        {value ? (
+          <HighlightedText text={value} query={searchQuery || ''} />
+        ) : (
+          <span className="opacity-30">{placeholder}</span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <textarea
       ref={textareaRef}
+      autoFocus
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onBlur={() => setIsFocused(false)}
       placeholder={placeholder}
       rows={1}
-      readOnly={readOnly}
       style={{ textAlign }}
-      className={`resize-none overflow-hidden block w-full bg-transparent focus:outline-none transition-all ${
-        readOnly ? 'cursor-default' : 'cursor-text'
-      } ${
-        isMatched 
-          ? 'bg-yellow-300 text-black rounded px-1 -mx-1 shadow-sm' 
-          : ''
-      } ${className}`}
+      className={`resize-none overflow-hidden block w-full bg-transparent focus:outline-none leading-normal transition-all whitespace-pre-wrap break-all py-1.5 ${className}`}
       onInput={adjustHeight}
     />
   );
@@ -61,14 +108,12 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // 判斷文字是否匹配搜尋
-  const isMatch = (text: string) => {
+  const checkMatch = (text: string) => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return false;
     return (text || '').toString().toLowerCase().includes(q);
   };
 
-  // 自動捲動邏輯
   useEffect(() => {
     const q = searchQuery.toLowerCase().trim();
     if (isFirstMatch && q && containerRef.current) {
@@ -87,31 +132,31 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
 
   const addRow = () => {
     if (!isEditMode) return;
-    const newRows = [...table.rows, new Array(table.columns.length).fill('')];
-    onUpdate({ ...table, rows: newRows });
+    onUpdate({ ...table, rows: [...table.rows, new Array(table.columns.length).fill('')] });
   };
 
   const addColumn = () => {
     if (!isEditMode) return;
-    const newColumns = [...table.columns, `新欄位`];
-    const newRows = table.rows.map(row => [...row, '']);
-    onUpdate({ ...table, columns: newColumns, rows: newRows });
+    onUpdate({ 
+      ...table, 
+      columns: [...table.columns, `新欄位`], 
+      rows: table.rows.map(row => [...row, '']) 
+    });
   };
 
   const removeRow = (index: number) => {
     if (!isEditMode) return;
-    if (table.rows.length <= 1) {
-      onUpdate({ ...table, rows: [new Array(table.columns.length).fill('')] });
-      return;
-    }
-    onUpdate({ ...table, rows: table.rows.filter((_, i) => i !== index) });
+    const newRows = table.rows.length <= 1 ? [new Array(table.columns.length).fill('')] : table.rows.filter((_, i) => i !== index);
+    onUpdate({ ...table, rows: newRows });
   };
 
   const removeColumn = (index: number) => {
     if (!isEditMode || table.columns.length <= 1) return;
-    const newColumns = table.columns.filter((_, i) => i !== index);
-    const newRows = table.rows.map(row => row.filter((_, i) => i !== index));
-    onUpdate({ ...table, columns: newColumns, rows: newRows });
+    onUpdate({ 
+      ...table, 
+      columns: table.columns.filter((_, i) => i !== index),
+      rows: table.rows.map(row => row.filter((_, i) => i !== index))
+    });
   };
 
   const updateCell = (rowIndex: number, colIndex: number, value: string) => {
@@ -150,8 +195,8 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
             value={table.title}
             onChange={(val) => onUpdate({ ...table, title: val })}
             readOnly={!isEditMode}
+            searchQuery={searchQuery}
             className="text-3xl font-black text-black border-b-2 border-black pb-1 uppercase italic"
-            isMatched={isMatch(table.title)}
             placeholder="表格標題..."
           />
         </div>
@@ -174,34 +219,39 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
         </div>
       </div>
 
-      <div ref={scrollContainerRef} className="max-h-[600px] overflow-auto custom-scrollbar relative bg-white">
-        <table className="border-separate border-spacing-0 w-max min-w-full">
+      <div ref={scrollContainerRef} className="max-h-[700px] overflow-auto custom-scrollbar relative bg-white">
+        <table className="border-separate border-spacing-0 w-max min-w-full table-fixed">
           <thead>
             <tr className="sticky top-0 z-[60]">
-              {table.columns.map((col, idx) => (
-                <th 
-                  key={idx} 
-                  className={`p-3 border-b-4 border-r-2 border-black relative group text-center
-                    ${idx === 0 
-                      ? 'sticky left-0 z-[70] border-r-4 bg-gray-50 min-w-[80px] w-[80px]' 
-                      : 'bg-white min-w-[210px] w-[210px] text-left'
-                    }
-                  `}
-                >
-                  <AutoHeightTextarea 
-                    value={col} 
-                    onChange={(v) => updateHeader(idx, v)} 
-                    readOnly={!isEditMode}
-                    className={`text-black uppercase placeholder:text-black/30 ${idx === 0 ? 'text-lg font-black' : 'text-xs font-black'}`} 
-                    isMatched={isMatch(col)}
-                    placeholder={idx === 0 ? "ID" : `欄位 ${idx + 1}`}
-                    textAlign={idx === 0 ? 'center' : 'left'}
-                  />
-                  {isEditMode && (
-                    <button onClick={() => removeColumn(idx)} className="opacity-0 group-hover:opacity-100 absolute top-1 right-1 text-black/20 hover:text-red-600 transition-opacity p-1"><i className="fas fa-times-circle text-[10px]"></i></button>
-                  )}
-                </th>
-              ))}
+              {table.columns.map((col, idx) => {
+                const isFirstCol = idx === 0;
+                const colWidth = isFirstCol ? '200px' : '250px';
+                return (
+                  <th 
+                    key={idx} 
+                    style={{ width: colWidth, minWidth: colWidth }}
+                    className={`p-3 border-b-4 border-r-2 border-black relative group text-center align-top transition-colors
+                      ${isFirstCol 
+                        ? 'sticky left-0 z-[70] border-r-4 bg-yellow-400' 
+                        : 'bg-white text-left'
+                      }
+                    `}
+                  >
+                    <AutoHeightTextarea 
+                      value={col} 
+                      onChange={(v) => updateHeader(idx, v)} 
+                      readOnly={!isEditMode}
+                      searchQuery={searchQuery}
+                      className={`text-black uppercase placeholder:text-black/30 ${isFirstCol ? 'text-lg font-black italic' : 'text-xs font-black'}`} 
+                      placeholder={isFirstCol ? "ID" : `欄位 ${idx + 1}`}
+                      textAlign={isFirstCol ? 'center' : 'left'}
+                    />
+                    {isEditMode && (
+                      <button onClick={() => removeColumn(idx)} className="opacity-0 group-hover:opacity-100 absolute top-1 right-1 text-black/20 hover:text-red-600 transition-opacity p-1"><i className="fas fa-times-circle text-[10px]"></i></button>
+                    )}
+                  </th>
+                );
+              })}
               {isEditMode && (
                 <th className="p-3 w-10 border-b-4 border-black bg-gray-100 text-center sticky right-0 top-0 z-[65]">
                   <button onClick={addColumn} className="hover:scale-125 transition-transform"><i className="fas fa-plus-circle text-lg text-black"></i></button>
@@ -211,28 +261,33 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
           </thead>
           <tbody>
             {table.rows.map((row, rIdx) => (
-              <tr key={rIdx} className="hover:bg-gray-50 transition-colors group">
-                {row.map((cell, cIdx) => (
-                  <td 
-                    key={cIdx} 
-                    data-matched={isMatch(cell)}
-                    className={`p-2 border-b-2 border-r-2 border-black text-black transition-all
-                      ${cIdx === 0 
-                        ? 'sticky left-0 z-50 bg-gray-50 font-black border-r-4 min-w-[80px] w-[80px] text-center' 
-                        : 'font-medium bg-white min-w-[210px] w-[210px] text-left'
-                      }
-                    `}
-                  >
-                    <AutoHeightTextarea 
-                      value={cell} 
-                      onChange={(v) => updateCell(rIdx, cIdx, v)} 
-                      readOnly={!isEditMode}
-                      textAlign={cIdx === 0 ? 'center' : 'left'}
-                      isMatched={isMatch(cell)}
-                      className={`text-black leading-tight ${cIdx === 0 ? 'text-lg font-black' : 'text-xs'}`} 
-                    />
-                  </td>
-                ))}
+              <tr key={rIdx} className="hover:bg-gray-50/50 transition-colors group">
+                {row.map((cell, cIdx) => {
+                  const isFirstCol = cIdx === 0;
+                  const colWidth = isFirstCol ? '200px' : '250px';
+                  return (
+                    <td 
+                      key={cIdx} 
+                      data-matched={checkMatch(cell)}
+                      style={{ width: colWidth, minWidth: colWidth }}
+                      className={`p-3 border-b-2 border-r-2 border-black text-black transition-all align-top
+                        ${isFirstCol 
+                          ? 'sticky left-0 z-50 bg-yellow-400 font-black border-r-4 text-center shadow-[2px_0px_0px_0px_rgba(0,0,0,1)]' 
+                          : 'font-medium bg-white text-left'
+                        }
+                      `}
+                    >
+                      <AutoHeightTextarea 
+                        value={cell} 
+                        onChange={(v) => updateCell(rIdx, cIdx, v)} 
+                        readOnly={!isEditMode}
+                        searchQuery={searchQuery}
+                        textAlign={isFirstCol ? 'center' : 'left'}
+                        className={`text-black ${isFirstCol ? 'text-lg font-black' : 'text-xs'}`} 
+                      />
+                    </td>
+                  );
+                })}
                 {isEditMode && (
                   <td className="p-1 border-b-2 border-black text-center w-10 bg-white sticky right-0 z-20">
                     <button onClick={() => removeRow(rIdx)} className="hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"><i className="fas fa-trash-can text-sm"></i></button>
@@ -257,7 +312,8 @@ export const TableEditor: React.FC<TableEditorProps> = ({ table, onUpdate, onDel
         .custom-scrollbar::-webkit-scrollbar-track { background: #fff; border: 1px solid black; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #000; border: 2px solid #fff; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #333; }
-        .sticky.left-0::after { content: ''; position: absolute; top: 0; right: -4px; bottom: 0; width: 4px; pointer-events: none; border-right: 1px solid rgba(0,0,0,0.1); }
+        .sticky.left-0::after { content: ''; position: absolute; top: 0; right: -4px; bottom: 0; width: 4px; pointer-events: none; }
+        mark { background-color: #d946ef; color: white; border: 1px solid black; border-radius: 2px; padding: 0 4px; font-weight: 900; box-shadow: 1px 1px 0px 0px rgba(0,0,0,1); }
       `}</style>
     </div>
   );
